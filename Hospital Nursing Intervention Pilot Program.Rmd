@@ -1,0 +1,1063 @@
+---
+title: "Hospital Nursing Intervention Pilot Program "
+subtitle: ""
+author: "Deepali Krishna Kashyap"
+date: "2025-03-23"
+output:
+  html_document:
+    code_folding: hide
+    theme: cerulean
+---
+<!-- Custom CSS for styling -->
+<style>
+  h1 {
+    text-align: center;
+    color: #1F53B4;font-weight: bold;/* Change this to your preferred color for the title */
+  }
+  h3.subtitle {
+    text-align: center;
+    color: #1F76B4; /* Change this to your preferred color for the subtitle */
+  }
+  .author {
+    text-align: center;
+    color: #008080; /* Change this to your preferred color for the author */
+  }
+  .date {
+    text-align: center;
+    color: #003636; /* Change this to your preferred color for the date */
+  }
+</style>
+
+
+<h2 style="color: #004949;">
+**Loading Libraries**
+</h2>
+
+<h4>
+First of all we want to make sure we have installed the packages that we will need for our analysis. Since we will use SQL for the whole project, is very important to have the RSQLite package installed which allows us to work with SQL in the R environment.</h4>
+
+```{r load libraries}
+if (!requireNamespace("tidyverse", quietly = TRUE)) {
+  install.packages("tidyverse")
+}
+library(tidyverse)
+
+if (!requireNamespace("RSQLite", quietly = TRUE)) {
+  install.packages("RSQLite")
+}
+library(RSQLite)
+
+```
+
+
+
+<h4 style="color: #000000;">
+1.Identify the dimensions from each dimension table 
+
+You'll notice in bed_type Download bed_type there are only three variables, bed_id, bed_code, and bed_desc. Consider which of these is a fact if any and which is a dimension. Note that the PK qualifies as a dimension.
+
+For the business Download business table, pay attention to the differences between a fact and a dimension variable as we discussed in class. In this table there are only three dimensions to select. See if you can correctly identify which ones they are (again the PK can be counted as one dimension).
+</h4>
+
+
+
+
+<h4>Creation of the database and importing the three tables:</h4>
+
+```{r}
+
+
+# Step 1: Create (or connect to) an SQLite database
+connection <- dbConnect(RSQLite::SQLite(), "hospital_nursingdb.db")
+
+# Step 2: Import each CSV file manually
+
+# Import "bed_fact-1.csv" as "bed_fact" table
+bed_fact <- read.csv("bed_fact-1.csv")
+dbWriteTable(connection, "bed_fact", bed_fact, row.names = FALSE, overwrite = TRUE)
+cat("Imported bed_fact-1.csv as bed_fact table.\n")
+
+# Import "bed_type-1.csv" as "bed_type" table
+bed_type <- read.csv("bed_type-1.csv")
+dbWriteTable(connection, "bed_type", bed_type, row.names = FALSE, overwrite = TRUE)
+cat("Imported bed_type-1.csv as bed_type table.\n")
+
+# Import "business-1.csv" as "business" table
+business <- read.csv("business-1.csv")
+dbWriteTable(connection, "business", business, row.names = FALSE, overwrite = TRUE)
+cat("Imported business-1.csv as business table.\n")
+
+# Step 3: List all tables in the database to verify import
+dbListTables(connection)
+
+cat("Database setup completed successfully!\n")
+```
+<h4>
+We are able to retrieve the rows and columns per each of the three tables by implementing a function called: get_info_table that retrieves the number of rows and columns of each table (table_name). After that, the information is displayed as a data frame for a better understanding of the rows and columns of each table. 
+</h4>
+```{r}
+get_info_table <- function(conn, table_name) {
+  # Get the row count
+  row_query <- dbGetQuery(conn, paste0("SELECT COUNT(*) AS row_count FROM ", table_name))
+  row_count <- row_query$row_count
+  
+  # Get the column count
+  column_count <- length(dbListFields(conn, table_name))
+
+  
+  # Return as a dataframe (optional)
+  return(data.frame(Table = table_name, Rows = row_count, Columns = column_count))
+}
+
+# Get table info for each table
+bed_type_info <- get_info_table(connection, "bed_type")
+bed_fact_info <- get_info_table(connection, "bed_fact")
+business_info <- get_info_table(connection, "business")
+
+# Combine results into a single dataframe
+table_summary <- rbind(bed_type_info, bed_fact_info, business_info)
+
+# Print the final summary
+head(table_summary)
+```
+
+<h4>
+Analyzing the outliers in the license_beds column and visualizing the results:
+</h4>
+
+```{r}
+# Load necessary libraries
+
+library(dplyr)
+library(ggplot2)
+
+# Fetch data
+query <- "SELECT ims_org_id, license_beds FROM bed_fact;"
+bed_fact <- dbGetQuery(connection, query)
+
+# Compute Mean
+mean_beds <- mean(bed_fact$license_beds, na.rm = TRUE)
+
+# Compute Standard Deviation
+sd_beds <- sd(bed_fact$license_beds, na.rm = TRUE)
+
+# Define High and Low Outlier Thresholds (3 standard deviations from the mean)
+high_outliers_beds <- mean_beds + 1.5 * sd_beds
+low_outliers_beds <- mean_beds - 1.5 * sd_beds
+
+# Print key statistics
+print(paste("Mean License Beds:", mean_beds))
+print(paste("Standard Deviation of License Beds:", sd_beds))
+print(paste("High Outlier Threshold:", high_outliers_beds))
+print(paste("Low Outlier Threshold:", low_outliers_beds))
+
+# Count the number of outliers
+n_beds_outliers <- sum(bed_fact$license_beds < low_outliers_beds | bed_fact$license_beds > high_outliers_beds)
+print(paste("Total Outliers in License Beds:", n_beds_outliers))
+
+# Filter out outliers from the dataset
+filtered_bed_fact <- bed_fact %>%
+  filter(license_beds >= low_outliers_beds & license_beds <= high_outliers_beds)
+
+# Count the number of rows after filtering
+n_filtered_beds <- nrow(filtered_bed_fact)
+print(paste("Total Rows After Removing Outliers:", n_filtered_beds))
+
+# Verify that removing outliers gives us the expected row count
+expected_rows <- n_filtered_beds + n_beds_outliers
+print(paste("Total Rows Before Removal (Check):", expected_rows))
+
+# Boxplot before removing outliers
+ggplot(bed_fact, aes(x = license_beds)) + 
+  geom_boxplot(fill = "red") + 
+  labs(title = "Boxplot of License Beds (Before Outlier Removal)", x = "License Beds")
+
+# Boxplot after removing outliers
+ggplot(filtered_bed_fact, aes(x = license_beds)) + 
+  geom_boxplot(fill = "blue") + 
+  labs(title = "Boxplot of License Beds (After Outlier Removal)", x = "License Beds")
+
+```
+
+<h4>
+Now that we already know the size of each of the tables, we want to make sure that we understand which variables are facts and which variables are dimensions in the tables "bed_type" and "business"
+<h4>
+
+```{r}
+business_df <- dbGetQuery(connection, "SELECT *  FROM business")
+
+bed_type_df <- dbGetQuery(connection, "SELECT *  FROM bed_type")
+
+head(business_df)
+
+head(bed_type_df)
+
+query <- "
+SELECT *
+FROM business
+WHERE ttl_license_beds IS NOT NULL
+GROUP BY ttl_license_beds
+ORDER BY ttl_license_beds DESC
+;
+" 
+max_business <- dbGetQuery(connection, query)
+head(max_business)
+
+
+```
+
+<h4 style="color: #004949;">
+*The dimensions re descriptive attributes or categories that provide context to the facts. In that case, if we look at the "business" table, we can see that the following variables help filter and categorize the data for analysis:*
+</h4>
+<h4>
+DIMENSION VARIABLES OF THE BUSINESS TABLE:
+
+- The Primary Key (PK): ims_org_id  
+- The Business Name: business_name  
+- The bed cluster id: bed_cluster_id  
+</h4>
+
+<h4 style="color: #004949;">
+*Facts are measurable, quantitative data which represents business events. The following variables, store numeric values used for reporting, calculations and aggregations:* 
+</h4>
+
+<h4>
+FACT VARIABLES OF THE BUSINESS TABLE:  
+
+- License beds: ttl_license_beds  
+- Census beds: ttl_census_beds
+- Staffed beds: ttl_staffed_beds  
+
+</h4>
+
+<h4>
+DIMENSIONS VARIABLES OF THE BED TYPE TABLE:
+
+- The Primary Key(PK): bed_id
+- The bed code_ bed_code
+- The bed description: bed_desc
+</h4>
+
+<h4 style="color: #004949;">
+*The bed_type table, doesn't have any fact variables*
+</h4>
+
+
+
+<h4 style="color: #000000;">
+2.Identify the Facts variables from the single Fact Table 
+
+Consider what type of variable would be a fact vs. a dimension and select three of those from the bed_fact Download bed_fact table. Be aware, it is likely that some variables in a fact table are dimensions, for example a foreign key or anything of that sort is a dimension even if it's listed in the fact table.
+</h4>
+
+
+
+```{r}
+# Load required libraries
+library(RSQLite)
+library(DBI)
+library(dplyr)
+
+# Step 1: Create (or connect to) an SQLite database
+connection <- dbConnect(SQLite(), "hospital_nursingdb.db")
+
+# Import "bed_fact.csv" as "bed_fact" table
+bed_fact <- read.csv("bed_fact-1.csv")
+dbWriteTable(connection, "bed_fact", bed_fact, row.names = FALSE, overwrite = TRUE)
+cat("Imported bed_fact.csv as bed_fact table.\n")
+
+# Step 2: List all tables in the database to verify import
+dbListTables(connection)
+
+cat("Database setup completed successfully!\n")
+```
+
+<h4>
+Retrieving the number of rows and columns for bed_fact to understand its structure.
+</h4>
+
+```{r}
+# Function to get table information
+get_info_table <- function(conn, table_name) {
+  # Get the row count
+  row_query <- dbGetQuery(conn, paste0("SELECT COUNT(*) AS row_count FROM ", table_name))
+  row_count <- row_query$row_count
+
+  # Get the column count
+  column_count <- length(dbListFields(conn, table_name))
+
+  # Return as a dataframe
+  return(data.frame(Table = table_name, Rows = row_count, Columns = column_count))
+}
+
+# Get table info for bed_fact
+bed_fact_info <- get_info_table(connection, "bed_fact")
+
+# Print the final summary
+head(bed_fact_info)
+```
+
+<h4>
+Determining which columns are facts, we check data types and unique values.
+</h4>
+```{r}
+# Fetch the first few rows
+head(bed_fact)
+
+# Check the structure of bed_fact table
+str(bed_fact)
+
+# Count unique values per column
+sapply(bed_fact, function(x) length(unique(x)))
+```
+
+<h4>
+Analyzing outliers in license_beds using mean and standard deviation.
+</h4>
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Fetch data
+query <- "SELECT ims_org_id, license_beds FROM bed_fact;"
+bed_fact <- dbGetQuery(connection, query)
+
+# Compute Mean and Standard Deviation
+mean_beds <- mean(bed_fact$license_beds, na.rm = TRUE)
+sd_beds <- sd(bed_fact$license_beds, na.rm = TRUE)
+
+# Define Outlier Threshold (1.5 Standard Deviations)
+high_outliers_beds <- mean_beds + 1.5 * sd_beds
+low_outliers_beds <- mean_beds - 1.5 * sd_beds
+
+# Count the number of outliers
+n_beds_outliers <- sum(bed_fact$license_beds < low_outliers_beds | bed_fact$license_beds > high_outliers_beds)
+print(paste("Total Outliers in License Beds:", n_beds_outliers))
+
+# Boxplot before removing outliers
+ggplot(bed_fact, aes(x = license_beds)) + 
+  geom_boxplot(fill = "red") + 
+  labs(title = "Boxplot of License Beds (Before Outlier Removal)", x = "License Beds")
+```
+
+<h4>
+Determining which columns are fact variables.
+</h4>
+```{r}
+# Fetch data from bed_fact table
+bed_fact_df <- dbGetQuery(connection, "SELECT * FROM bed_fact")
+
+# Display the dataset
+head(bed_fact_df)
+
+# Query to check facts and dimensions
+query <- "
+SELECT *
+FROM bed_fact
+WHERE license_beds IS NOT NULL
+GROUP BY license_beds
+ORDER BY license_beds DESC
+;"
+max_bed_fact <- dbGetQuery(connection, query)
+head(max_bed_fact)
+```
+
+
+<h4>
+*Dimension Variables (Descriptive Attributes)*
+	•	ims_org_id → Foreign Key (Hospital ID)
+	•	bed_id → Foreign Key (Bed Type)
+
+*Fact Variables (Measurable Data)*
+	•	license_beds → Number of beds licensed for use.
+	•	census_beds → Number of occupied (census) beds.
+	•	staffed_beds → Number of beds currently staffed.
+</h4>
+
+
+
+
+
+<h4 style="color: #000000;">
+3a.Analysis for Leadership 
+
+Identify which hospitals have an Intensive Care Unit (ICU bed_id = 4) bed or a Surgical Intensive Care Unit (SICU bed_id = 15) bed.
+
+Create three summary reports that show the following:
+
+1.License beds: List of Top 10 Hospitals ordered descending by the total ICU or SICU license beds.
+
+Include just two variables, hospital_name (business_name) and the total license beds from above as one summary fact. But include only 10 rows in your output table.
+2.Do the same thing for Census beds. List of Top 10 Hospitals ordered by total icu or sicu census beds. Include just two variables, hospital_name (business_name) and the total census beds from above as one summary fact. Include only 10 rows again.
+
+3.Do the same thing for Staffed beds. List of Top 10 Hospitals ordered by the total icu or sicu staffed beds. Include just two variables, hospital_name (business_name) and the sum of staffed beds from above as one summary fact. Include only 10 rows again.
+</h4>
+
+
+<h4 style="color: #004949;">
+1.License Beds: Top 10 Hospitals Ordered by Total ICU or SICU License Beds
+</h4>
+
+```{r}
+license_beds <- "
+  SELECT b.business_name AS hospital_name, SUM(f.license_beds) AS total_license_beds
+  FROM bed_fact f
+  JOIN bed_type bt ON f.bed_id = bt.bed_id
+  JOIN business b ON f.ims_org_id = b.ims_org_id
+  WHERE bt.bed_id IN (4, 15)  
+  GROUP BY b.business_name
+  ORDER BY total_license_beds DESC
+  LIMIT 10
+"
+result_license_beds <- dbGetQuery(connection, license_beds)
+print(result_license_beds)
+
+
+```
+
+<h4>
+Explanation
+
+1. Filtered the Data
+We selected hospitals that have either ICU (bed_id = 4) or SICU (bed_id = 15).
+A hospital does not need both bed types to be included in the report.
+
+2. Joined the Datasets
+We merged bed_fact with business (for hospital names) and bed_type (for bed descriptions) using SQL JOIN.
+This ensures accurate mapping of ICU/SICU beds to their respective hospitals.
+
+3. Grouped and Summarized the Data
+We grouped the data by business_name (hospital).
+We summed up the license_beds to determine each hospital’s approved ICU/SICU capacity.
+
+4. Sorted and Retrieved the Top 10 Hospitals
+We sorted hospitals in descending order based on their total licensed ICU/SICU beds.
+We limited the output to only 10 hospitals as required.
+
+5. Displayed the Final Results
+The resulting table presents the top 10 hospitals with the highest licensed ICU/SICU bed capacity, providing leadership with insights into hospital readiness and resource allocation.
+
+</h4>
+
+
+
+<h4 style="color: #004949;">
+
+2.Census Beds: Top 10 Hospitals Ordered by Total ICU or SICU Census Beds
+
+</h4>
+
+```{r}
+
+census_beds <- "
+  SELECT b.business_name AS hospital_name, SUM(f.census_beds) AS total_census_beds
+  FROM bed_fact f
+  JOIN bed_type bt ON f.bed_id = bt.bed_id
+  JOIN business b ON f.ims_org_id = b.ims_org_id
+  WHERE bt.bed_id IN (4, 15)  -- ICU and SICU bed IDs
+  GROUP BY b.business_name
+  ORDER BY total_census_beds DESC
+  LIMIT 10
+"
+result_census_beds <- dbGetQuery(connection, census_beds)
+print(result_census_beds)
+
+```
+
+<h4>
+Explanation
+
+1. Filtered the Data
+We selected hospitals that have either ICU (bed_id = 4) or SICU (bed_id = 15).
+A hospital does not need both bed types to be included in the report.
+
+2. Joined the Datasets
+We merged bed_fact with business (for hospital names) and bed_type (for bed descriptions) using SQL JOIN.
+This ensures accurate mapping of ICU/SICU beds to their respective hospitals.
+
+3. Grouped and Summarized the Data
+We grouped the data by business_name (hospital).
+We summed up the license_beds to determine each hospital’s approved ICU/SICU capacity.
+
+4. Sorted and Retrieved the Top 10 Hospitals
+We sorted hospitals in descending order based on their total licensed ICU/SICU beds.
+We limited the output to only 10 hospitals as required.
+
+5. Displayed the Final Results
+The resulting table presents the top 10 hospitals with the highest licensed ICU/SICU bed capacity, providing leadership with insights into hospital readiness and resource allocation.
+</h4>
+
+
+
+<h4 style="color: #004949;">
+
+3.Staffed Beds: Top 10 Hospitals Ordered by Total ICU or SICU Staffed Beds
+
+</h4>
+
+```{r}
+staffed_beds <- "
+  SELECT b.business_name AS hospital_name, SUM(f.staffed_beds) AS total_staffed_beds
+  FROM bed_fact f
+  JOIN bed_type bt ON f.bed_id = bt.bed_id
+  JOIN business b ON f.ims_org_id = b.ims_org_id
+  WHERE bt.bed_id IN (4, 15)  -- ICU and SICU bed IDs
+  GROUP BY b.business_name
+  ORDER BY total_staffed_beds DESC
+  LIMIT 10
+"
+result_staffed_beds <- dbGetQuery(connection, staffed_beds)
+print(result_staffed_beds)
+
+```
+
+<h4>
+Explanation
+
+We selected hospitals that have either an ICU (bed_id = 4) or SICU (bed_id = 15), ensuring that a hospital does not need both to be included.
+We used SQL JOINs to combine the bed_fact dataset (bed details), business dataset (hospital names), and bed_type dataset (bed descriptions) to ensure accurate mapping.
+We grouped the data by business_name (hospital) to aggregate bed counts per hospital.
+We summed up the staffed_beds to determine the total number of ICU/SICU beds that are staffed and available for patient use.
+We sorted the results in descending order to list the top 10 hospitals with the most staffed ICU/SICU beds.
+</h4>
+
+```{r, fig.width=10, fig.height=4}
+# License Beds Bar Plot
+ggplot(result_license_beds, aes(x = reorder(hospital_name, -total_license_beds), y = total_license_beds)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_text(aes(label = total_license_beds), hjust = -0.2, size = 3.5) +  # Adding data labels
+  coord_flip() +
+  labs(title = "Top 10 Hospitals by ICU/SICU License Beds", y = "Hospital", x = "Total License Beds") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+```
+
+```{r, fig.width=10, fig.height=4}
+
+#Top 10 Hospitals by ICU/SICU Census Beds
+
+# Census Beds Bar Plot 
+ggplot(result_census_beds, aes(x = reorder(hospital_name, -total_census_beds), y = total_census_beds)) +
+  geom_bar(stat = "identity", fill = "darkorange") +
+  geom_text(aes(label = total_census_beds), hjust = -0.2, size = 3.5) +  
+  coord_flip() +
+  labs(title = "Top 10 Hospitals by ICU/SICU Census Beds", x = "Hospital", y = "Total Census Beds") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+```
+
+```{r, fig.width=10, fig.height=4}
+#Top 10 Hospitals by ICU/SICU Staffed Beds
+
+# Staffed Beds Bar Plot
+
+ggplot(result_staffed_beds, aes(x = reorder(hospital_name, -total_staffed_beds), y = total_staffed_beds)) +
+  geom_bar(stat = "identity", fill = "forestgreen") +
+  geom_text(aes(label = total_staffed_beds), hjust = -0.2, size = 3.5) + 
+  coord_flip() +
+  labs(title = "Top 10 Hospitals by ICU/SICU Staffed Beds", x = "Hospital", y = "Total Staffed Beds") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5)) 
+
+```
+
+
+
+<h4 style="color: #000000;">
+3b. Interpretation of Findings 
+
+Based on your results from step 3a, discuss your insights from the data summary that you want to bring to the attention of Leadership.
+
+For example, what are the top one or two hospitals per list based on bed volume? Are there any hospitals that appear on multiple lists? They might make good candidates for the intervention pilot program.
+
+</h4>
+
+
+<h4 style="color: #004949;">
+After analyzing the top 10 hospitals based on ICU and SICU bed data for license beds, census beds, and staffed beds, here are some insights that should be brought to the attention of Leadership:
+</h4>
+
+<h4 style="color: #004949;">
+**1. Top Hospitals by License Beds**
+</h4>
+<h4>
+The hospitals with the highest number of ICU and SICU license beds are significant because they have the largest infrastructure for critical care.
+Key Insight: The top two hospitals based on ICU/SICU license beds are:
+Hospital **Phoenix Childrens Hospital**	 with **247** total license beds.
+Hospital **University of Maryland Medical Center** with **220** total license beds.
+These hospitals could be critical resources in accommodating patients requiring intensive care and surgical recovery. Their capacity positions them as potential hubs for handling high patient volumes during emergencies.
+</h4>
+
+
+<h4 style="color: #004949;">
+**2. Top Hospitals by Census Beds**
+</h4>
+<h4>
+The hospitals with the highest ICU/SICU census beds are crucial because this represents the actual utilization of those beds. High census bed counts indicate a high volume of patients currently in critical care.
+Key Insight: The top two hospitals based on ICU/SICU census beds are:
+Hospital **Shands Hospital at the University of Florida**	 with **167** total census beds.
+Hospital **Dallas County Hospital Association	** with **145** total census beds.
+These hospitals are actively serving a large number of patients, suggesting that they play a key role in managing critical patient care and may need further support to manage this load efficiently.
+</h4>
+
+
+<h4 style="color: #004949;">
+**3. Top Hospitals by Staffed Beds**
+</h4>
+
+<h4>
+The number of staffed ICU/SICU beds is a critical metric since it reflects the hospital's operational capacity, i.e., how well they are equipped with the necessary medical personnel to attend to ICU/SICU patients.
+Key Insight: The top two hospitals by ICU/SICU staffed beds are:
+Hospital **Vidant Medical Center**	 with **203** total staffed beds.
+Hospital **Rady Childrens Hospital and Health Center** with **200** total staffed beds.
+These hospitals have high operational readiness and staff capacity, making them suitable for any further expansions or programs requiring high staffing levels.
+</h4>
+
+<h4 style="color: #004949;">
+**Hospitals Appearing on Multiple Lists:**
+</h4>
+
+<h4>
+Key Insight: A few hospitals appear consistently in the top 10 across multiple lists (license, census, and staffed beds).
+For example:
+  **Phoenix Childrens Hospital** is present in both the **license beds** and **staffed beds** top 10.
+  **Vidant Medical Center** and **University of Maryland Medical Center** appears on all three lists (license, census, and staffed beds).
+
+These hospitals could make excellent candidates for any proposed intervention or pilot program. Their high capacity and staffing levels make them strong contenders to efficiently handle additional load or support critical care improvement programs.
+</h4>
+
+
+<h4 style="color: #004949;">
+**Recommendations for Leadership:**
+</h4>
+
+<h4>
+Pilot Program Candidate: Hospitals like Hospital **Phoenix Childrens Hospital** and Hospital **Vidant Medical Center** should be considered for a pilot program aimed at improving ICU and SICU operations. Their large volume of licensed, staffed, and census beds makes them ideal for testing new care models, technologies, or staffing approaches.</h4>
+
+<h4>
+Their scale and readiness make them suitable for implementing and evaluating interventions before a broader roll out. The results from these pilot programs will inform best practices for improving ICU/SICU operations in other hospitals.
+</h4>
+
+<h4>
+Resource Allocation: Given the high census bed count in Hospital **Vidant Medical Center**, it may require additional resources such as more staff or equipment to manage its current and future patient load efficiently. Other high-volume hospitals should also be prioritized for resource distribution.</h4>
+
+<h4>
+Allocating additional staff and resources to these high-demand hospitals ensures that patient care remains efficient and that the hospital can manage surges in patient volume without compromising on service quality.
+</h4>
+
+<h4>
+Capacity Expansion: Hospitals that lead in license and staffed beds (e.g., Hospital **Phoenix Childrens Hospital**) should be considered for capacity expansion programs to further scale their ability to provide critical care services, especially if there is a surge in demand.
+</h4>
+
+<h4>
+Scaling up their operations ensures these hospitals can respond to both current needs and potential future surges, enhancing their role as critical care providers and mitigating strain on other hospitals with lower capacity.
+</h4>
+
+
+
+<h4 style="color: #004949;">
+**Stacked Bar Chart**
+</h4>
+
+```{r}
+
+# Ensure consistent column names
+names(result_license_beds) <- c("hospital_name", "total_beds")
+names(result_census_beds) <- c("hospital_name", "total_beds")
+names(result_staffed_beds) <- c("hospital_name", "total_beds")
+
+# Add a new column to indicate the bed type
+result_license_beds$type <- "License Beds"
+result_census_beds$type <- "Census Beds"
+result_staffed_beds$type <- "Staffed Beds"
+
+```
+
+```{r}
+# Combine the three datasets
+combined_beds <- rbind(result_license_beds, result_census_beds, result_staffed_beds)
+
+
+
+```
+
+```{r, fig.width=10, fig.height=4}
+# Stacked Bar Chart for all three bed types with Data Labels
+ggplot(combined_beds, aes(x = reorder(hospital_name, -total_beds), y = total_beds, fill = type)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = total_beds), position = position_stack(vjust = 0.5), size = 3) +  # Adding data labels
+  coord_flip() +
+  labs(title = "Top 10 Hospitals by ICU/SICU Beds", x = "Hospital", y = "Total Beds") +
+  scale_fill_manual(values = c("License Beds" = "steelblue", "Census Beds" = "darkorange", "Staffed Beds" = "forestgreen")) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5))  # Center the title
+
+```
+<h4>
+Census Beds: This represents the number of beds currently occupied by patients. It shows how much of the hospital's capacity is in use.
+License Beds: This represents the number of beds the hospital is licensed to operate, indicating the legal capacity they are allowed to manage.
+Staffed Beds: This represents the number of beds that have sufficient staff (e.g., nurses, doctors) to provide care, indicating the hospital's operational readiness.
+</h4>
+
+<h4 style="color: #004949;">
+**Top Hospitals:**
+</h4>
+<h4>
+**Phoenix Children's Hospital** has the highest number of staffed beds (247), with a balanced number of licensed and census beds.
+**Rady Children's Hospital and Health Center** and **Vidant Medical Center** also have large numbers of staffed and licensed beds.
+
+License Beds Leading: Some hospitals, like **UC Health University Hospital** and **Vidant Medical Center**, have more licensed beds than census beds or staffed beds, indicating they are allowed more capacity than they are currently utilizing or staffing.
+
+High Utilization: Hospitals such as **Dallas County Hospital Association** have a substantial number of census beds (orange) and staffed beds, showing that they are operating near full capacity.
+
+This graph helps identify which hospitals have the most licensed capacity, which are staffing the most beds, and how many are actually being used (census beds). Leadership could use this data for resource allocation, staffing adjustments, or planning for future expansion based on hospital utilization.
+</h2>
+
+
+
+
+<h4 style="color: #000000;">
+
+
+4a.Drill down investigation 
+
+Leadership is also interested in hospitals that have sufficient volume of both ICU and SICU beds, as opposed to either type of bed that you developed in step 3a.
+
+Conduct the same investigation as you did for 3a and list the same output of top 10 hospitals by descending bed volume, only this time select only those top 10 hospitals that have both kinds of ICU and SICU beds, i.e. only hospitals that have at least 1 ICU bed and at least 1 SICU bed can be included in this part of the analysis.
+Conduct separate data investigations for Census beds, License beds, and staffed beds, like step 3a.
+</h4>
+
+
+<h4> We'll start by filtering hospitals that meet the criteria of having both ICU and SICU beds. The below query ensures that only hospitals that have both ICU and SICU beds are considered, making them stronger candidates for an intervention. It limits to 10 in the below query but we can identify details related to all the hospitals in consideration. </h4>
+
+
+```{r}
+query_hospital_beds <-
+"SELECT 
+    b.business_name, 
+    bf.bed_id,
+    bt.bed_desc,
+    bf.license_beds, 
+    bf.census_beds, 
+    bf.staffed_beds
+FROM bed_fact bf
+JOIN bed_type bt ON bf.bed_id = bt.bed_id
+JOIN business b ON bf.ims_org_id = b.ims_org_id
+WHERE bf.ims_org_id IN (
+    SELECT ims_org_id FROM (
+        SELECT ims_org_id FROM bed_fact WHERE bed_id = 4
+        INTERSECT
+        SELECT ims_org_id FROM bed_fact WHERE bed_id = 15
+    )
+)
+AND bt.bed_desc IN ('ICU', 'SICU')
+ORDER BY b.business_name, bt.bed_desc
+;"
+
+# Execute the query
+hospital_beds <- dbGetQuery(connection, query_hospital_beds)
+
+# Display the output
+head(hospital_beds)
+```
+
+<h4> The results will show the number of beds (licensed, census, staffed) for each hospital and each bed type (ICU and SICU).
+If a hospital has a high number of licensed beds but low staffed beds, this might indicate a staffing issue.
+A high number of census beds suggests high demand for intensive care services.
+If some hospitals have a high volume of ICU & SICU beds across all three categories, they may be the best candidates for pilot interventions.
+Leadership can identify hospitals that appear frequently across different analyses as the strongest candidates. </h4>
+
+
+```{r}
+
+
+# Aggregate total beds per hospital
+hospital_summary_license <- hospital_beds %>%
+  group_by(business_name) %>%
+  summarise(
+    total_license_beds_1 = sum(license_beds, na.rm = TRUE)
+  )
+
+
+# Top 10 hospitals by License Beds
+top_10_license_beds_0 <- hospital_summary_license %>%
+  arrange(desc(total_license_beds_1)) %>%
+  head(10)
+
+
+# Display the results
+print("Top 10 Hospitals by License Beds:")
+print(top_10_license_beds_0)
+
+
+
+
+```
+
+    
+```{r, fig.width=10, fig.height=4}
+
+ggplot(top_10_license_beds_0, aes(x = reorder(business_name, total_license_beds_1), 
+                                  y = total_license_beds_1)) +
+  geom_bar(stat = "identity", fill = "steelblue") +  # Bar color
+  geom_text(aes(label = total_license_beds_1), hjust = -0.2, size = 3.5) +  # Data labels
+  coord_flip() +  # Flip coordinates to make it horizontal
+  labs(title = "Top 10 Hospitals by License Beds",
+       x = "Hospital Name",
+       y = "Total License Beds") +
+  theme_minimal() 
+
+
+```
+
+
+<h4 style="color: #004949;">
+**Licensed Beds Analysis** </h4>
+
+<h4> Top hospital: University of Maryland Medical Center leads in licensed beds, meaning it has the highest authorized capacity by state regulators.
+The UC Health University Hospital follow closely.
+Key Insight: Licensed bed numbers set an upper limit, but actual usage depends on staffing levels and patient admissions. </h4> 
+    
+    
+```{r}
+# Aggregate total beds per hospital
+hospital_summary_census <- hospital_beds %>%
+  group_by(business_name) %>%
+  summarise(
+    total_census_beds_1 = sum(census_beds, na.rm = TRUE)
+  )
+
+
+# Top 10 hospitals by Census Beds
+top_10_census_beds_0 <- hospital_summary_census %>%
+  arrange(desc(total_census_beds_1)) %>%
+  head(10)
+
+
+# Display the results
+print("Top 10 Hospitals by Census Beds:")
+print(top_10_census_beds_0)
+```
+
+```{r, fig.width=10, fig.height=4}
+
+ggplot(top_10_census_beds_0, aes(x = reorder(business_name, total_census_beds_1), 
+                                  y = total_census_beds_1)) +
+  geom_bar(stat = "identity", fill = "orange") +  # Bar color
+  geom_text(aes(label = total_census_beds_1), hjust = -0.2, size = 3.5) +  # Data labels
+  coord_flip() +  # Flip coordinates to make it horizontal
+  labs(title = "Top 10 Hospitals by Census Beds",
+       x = "Hospital Name",
+       y = "Total Census Beds") +
+  theme_minimal() 
+
+```
+
+
+<h4 style="color: #004949;">
+**Census Beds Analysis** </h4>
+
+<h4> Shands Hospital at the University of Florida	have high census beds, showing strong patient intake.
+University of Minnesota Medical Center Fairview	 and University of Maryland Medical Center rank highly, meaning they operate near full capacity based on actual patient admissions.
+Key Insight: Hospitals with a high ratio of census beds to staffed beds may experience operational strain, requiring adjustments in workforce allocation. </h4>
+
+
+```{r}
+# Aggregate total beds per hospital
+hospital_summary_staffed <- hospital_beds %>%
+  group_by(business_name) %>%
+  summarise(
+    total_staffed_beds_1 = sum(staffed_beds, na.rm = TRUE)
+  )
+    
+# Top 10 hospitals by Staffed Beds
+top_10_staffed_beds_0 <- hospital_summary_staffed %>%
+  arrange(desc(total_staffed_beds_1)) %>%
+  head(10)
+
+# Display the results
+print("Top 10 Hospitals by Staffed Beds:")
+print(top_10_staffed_beds_0)
+```
+
+```{r, fig.width=10, fig.height=4}
+
+ggplot(top_10_staffed_beds_0, aes(x = reorder(business_name, total_staffed_beds_1), 
+                                  y = total_staffed_beds_1)) +
+  geom_bar(stat = "identity", fill = "darkgreen") +  # Bar color
+  geom_text(aes(label = total_staffed_beds_1), hjust = -0.2, size = 3.5) +  # Data labels
+  coord_flip() +  # Flip coordinates to make it horizontal
+  labs(title = "Top 10 Hospitals by Staffed Beds",
+       x = "Hospital Name",
+       y = "Total staffed Beds") +
+  theme_minimal()
+
+```
+
+<h4 style="color: #004949;">
+
+**Staffed Beds Analysis** </h4>
+
+<h4> The University of Maryland Medical Center ranks highest, indicating strong workforce availability.
+Shands Hospital at the University of Florida	, Grady Memorial Hospital, and UC Health University Hospital appear in the top 10, highlighting efficient resource allocation.
+Key Insight: A hospital may have a high number of licensed beds, but if staffing is inadequate, those beds cannot be effectively utilized for patient care. </h4>
+
+<h4 style="color: #004949;">
+Now Let's see a combined analysis of all three bed types and hospitals which are ranked highest in each bed type for both ICU and SICU </h4>
+
+
+```{r}
+
+# Aggregate total beds per hospital
+hospital_summary <- hospital_beds %>%
+  group_by(business_name) %>%
+  summarise(
+    total_license_beds_1 = sum(license_beds, na.rm = TRUE),
+    total_census_beds_1 = sum(census_beds, na.rm = TRUE),
+    total_staffed_beds_1 = sum(staffed_beds, na.rm = TRUE)
+  )
+
+# Convert data to long format for stacking
+hospital_summary_long <- hospital_summary %>%
+  pivot_longer(cols = c(total_license_beds_1, total_census_beds_1, total_staffed_beds_1),
+               names_to = "Bed_Type", values_to = "Count")
+
+# Rename Bed_Type values for better readability
+hospital_summary_long$Bed_Type <- factor(hospital_summary_long$Bed_Type, 
+                                         levels = c("total_license_beds_1", "total_census_beds_1", "total_staffed_beds_1"),
+                                         labels = c("License Beds", "Census Beds", "Staffed Beds"))
+
+# Select top 10 hospitals by license beds
+top_10_hospitals <- hospital_summary %>%
+  arrange(desc(total_license_beds_1)) %>%
+  head(10) %>%
+  pull(business_name)
+
+# Filter only top 10 hospitals in the long dataset
+hospital_summary_long <- hospital_summary_long %>%
+  filter(business_name %in% top_10_hospitals)
+
+# Create stacked bar chart with data labels
+ggplot(hospital_summary_long, aes(x = reorder(business_name, Count), y = Count, fill = Bed_Type)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = Count), position = position_stack(vjust = 0.5), size = 3.5, color = "black") +  # Add labels inside bars
+  coord_flip() +  # Flip to horizontal
+  labs(title = "Top 10 Hospitals by Bed Types",
+       x = "Hospital Name",
+       y = "Number of Beds",
+       fill = "Bed Type") +
+  theme_minimal() +
+  scale_fill_manual(values = c("steelblue", "orange", "darkgreen")) 
+
+
+```
+
+
+
+
+<h4> The above query identifies Top 10 Hospitals by Bed Volume with BOTH ICU and SICU, ordered by licensed_beds. We can see the most number of Licensed beds are in University of Maryland Medical Center, meaning they have the highest number of beds allowed by state license among all hospitals listed. The most number of Census beds are at Shands hospital at the University of Florida and the University of Minnesota Medical Center Fairview, with highest number of patients admitted to them. Finally, The University of Maryland Medical Center also has the highest number of Staffed beds, meaning highest beds for which staffing is available. </h4>
+
+
+<h4 style="color: #000000;">
+**Recommendations on the Intervention program for the leadership team** </h4>
+
+<h4 style="color: #004949;">
+**Expand staffing where necessary** </h4> 
+<h4> Hospitals with high licensed beds but fewer staffed beds should focus on recruiting physicians and nurses to optimize patient care.
+Facilities such as Jackson Memorial Hospital should ensure their staffed bed numbers align with their licensed capacity. </h4>
+
+<h4 style="color: #004949;">
+ **Monitor hospitals operating near full capacity** 
+ </h4> 
+<h4> High census bed numbers indicate full operational usage, which can lead to capacity challenges. Hospitals like Grady Memorial Hospital and Duke University Health System may need expansion or efficiency improvements to maintain patient flow. </h4>
+
+<h4 style="color: #004949;">
+ **Compare staffing vs. patient census to identify stress points** </h4> 
+<h4> If a hospital has a high census-to-staffed bed ratio, it may indicate a workforce bottleneck. Hospitals with underutilized licensed beds should focus on staffing improvements rather than facility expansion. </h4>
+
+
+
+
+<h4 style="color: #000000;">
+4b.Final recommendation 
+
+Based on your analyses in step 3a and 4a, state your final recommendation here for Leadership as to which hospitals are the best candidates for their pilot intervention program. Remember, Leadership stated they are only interested in one or two hospitals for their pilot sites so it’s best to tailor your recommendation to their business need and avoid unnecessary details that might confuse them. Identify your hospitals and briefly explain why you chose them.
+</h4>
+
+<h4 style="color: #004949;">
+**Executive Summary**
+</h4>
+
+<h4>
+Following a comprehensive analysis of ICU and SICU bed volumes across ACME’s hospital network, we recommend the University of Maryland Medical Center and Shands Hospital at the University of Florida as the top two candidates for the pilot nurse hiring intervention. These hospitals consistently rank among the highest across all three critical metrics: licensed beds, census beds, and staffed beds, specifically within ICU and SICU units. 
+Their strong infrastructure, active patient load, and clinical readiness make them ideal for launching a focused, high-impact initiative to improve nurse-to-patient ratios  a move that has been proven to enhance outcomes in intensive care settings.
+These recommendations are based on a joined analysis of hospital bed data and organizational details, ensuring both capacity and capability are considered in identifying optimal pilot sites.
+</h4>
+
+
+<h4 style="color: #004949;">
+**Analytical Approach**
+</h4>
+<h4>
+To identify high-potential pilot sites for the intervention, we analyzed hospital performance across the three most relevant types of ICU/SICU beds:
+Licensed Beds – Authorized capacity (beds approved by state license)
+Census Beds – Currently occupied beds (patient demand)
+Staffed Beds – Beds with sufficient staffing in place (readiness)
+We filtered data to include only hospitals with both ICU (bed_id = 4) and SICU (bed_id = 15), ensuring alignment with Leadership's focus. Then, we aggregated total bed counts per hospital and ranked them to determine the top 10 in each bed category.All queries were executed in R using the sqldf() function on the merged datasets:
+bed_fact – quantitative bed data 
+bed_type – mapping of bed_id to descriptions
+business – hospital identity and business name
+This ensured a clean, SQL-style analysis over joined relational data.
+</h4>
+
+
+<h4 style="color: #004949;">
+**Recommendation**
+</h4>
+
+
+<h4>
+Based on these consistent top rankings, we recommend the following pilot sites:
+<h4 style="color: #000000;">
+**University of Maryland Medical Center** </h4>
+<h4>
+ Rank 2 in Licensed Beds (220 beds) 
+ Rank 3 in Census Beds (127 beds) 
+ Rank 1 in Staffed Beds (171 beds) 
+Strong operational scale and patient demand 
+
+Positioned to support additional nursing staff with measurable outcomes </h4>
+
+<h4 style="color: #000000;">
+**Shands Hospital at the University of Florida**</h4>
+<h4>
+Rank 3 in Licensed Beds (167 beds)
+Rank 1 in Census Beds (167 beds)
+Rank 2 in Staffed Beds (167 beds)High-volume ICU/SICU activity and infrastructure
+Offers a second clinical context for comparative pilot analysis
+
+</h4>
+
+<h4 style="color: #004949;">
+**Final Note**
+</h4>
+
+<h4>
+This recommendation supports ACME's strategic goals by selecting hospitals that balance clinical demand, operational readiness, and potential return on investment.
+
+Launching the pilot at the University of Maryland Medical Center and Shands Hospital at the University of Florida will enable Leadership to:
+Demonstrate measurable improvements in ICU/SICU outcomes
+Build internal case studies for broader implementation
+Justify system-wide investment in future nurse staffing programs
+These two hospitals offer the best environment to ensure the success of this critical care initiative.
+</h4>
+
+
+
+
+
+
+
+
